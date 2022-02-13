@@ -18,6 +18,7 @@
 #define vga_mode vga_mode_320x240_60
 
 //#define COLOR_CHANGE_PIN        11
+#define ONBOARD_LED_PIN         25
 #define STATUS_LED_PIN          12
 #define STATUS_LED_PIN2         13
 
@@ -29,9 +30,9 @@
 #define HSYNC_PIN               15
 
 // INPUTS (NES Controller, color change pin)
-#define PULSE_PIN               8
+#define DATA_PIN                8
 #define LATCH_PIN               9
-#define DATA_PIN                10
+#define PULSE_PIN               10
 
 #define BUTTONS_DPAD_PIN        21      // P14
 #define BUTTONS_OTHER_PIN       20      // P15
@@ -286,6 +287,7 @@ static uint8_t framebuffer[160 * 144];
 
 static void draw_frame_buffer(scanvideo_scanline_buffer_t *buffer);
 static void initialize_gpio(void);
+static void video_stuff();
 static void nes_controller();
 static void gpio_callback(uint gpio, uint32_t events);
 static void color_change_check(void);
@@ -316,44 +318,50 @@ int main(void)
         button_states[i] = 1;
     }
 
-    bool vsync_reset;
-    bool vsync;
-    
+
+
+
     while (true) 
     {
-        uint8_t *p = framebuffer; 
+        video_stuff();
+        nes_controller();
+        color_change_check();
 
-        while (gpio_get(VSYNC_PIN) == 0);
+    
 
-        vsync_reset = false;
+    }
+}
 
-        for (int y = 0; y < 144; y++) {
-            while (gpio_get(HSYNC_PIN) == 0);
-            while (gpio_get(HSYNC_PIN) == 1);
+static void video_stuff()
+{
+    static bool vsync_reset;
+    static bool vsync;
 
-            //busy_wait_us ? 
-            // asm volatile("nop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\n");
-            // asm volatile("nop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\n");
+    uint8_t *p = framebuffer; 
+
+    while (gpio_get(VSYNC_PIN) == 0);
+
+    vsync_reset = false;
+
+    for (int y = 0; y < 144; y++) {
+        while (gpio_get(HSYNC_PIN) == 0);
+        while (gpio_get(HSYNC_PIN) == 1);
+
+        //busy_wait_us ? 
+        // asm volatile("nop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\n");
+        // asm volatile("nop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\n");
+        *p++ = (gpio_get(DATA_0_PIN) << 1) + gpio_get(DATA_1_PIN);
+        
+        for (int x = 0; x < 159; x++) {
+            while (gpio_get(PIXEL_CLOCK_PIN) == 0);
+            while (gpio_get(PIXEL_CLOCK_PIN) == 1);
+
             *p++ = (gpio_get(DATA_0_PIN) << 1) + gpio_get(DATA_1_PIN);
-            
-            for (int x = 0; x < 159; x++) {
-                while (gpio_get(PIXEL_CLOCK_PIN) == 0);
-                while (gpio_get(PIXEL_CLOCK_PIN) == 1);
-
-                *p++ = (gpio_get(DATA_0_PIN) << 1) + gpio_get(DATA_1_PIN);
-            }
-
-            vsync = gpio_get(VSYNC_PIN);
-            if (!vsync) { vsync_reset = true; }
-            if (vsync && vsync_reset) { break; }
         }
 
-        color_change_check();
-       
-        
-        //TODO:  status LED?
-
-        nes_controller();
+        vsync = gpio_get(VSYNC_PIN);
+        if (!vsync) { vsync_reset = true; }
+        if (vsync && vsync_reset) { break; }
     }
 }
 
@@ -405,14 +413,19 @@ void core1_func() {
 
 static void initialize_gpio(void)
 {    
-    // Status LED
-    gpio_init(STATUS_LED_PIN);
-    gpio_set_dir(STATUS_LED_PIN, GPIO_OUT);
-    gpio_put(STATUS_LED_PIN, 0);
+    //Onboard LED
+    gpio_init(ONBOARD_LED_PIN);
+    gpio_set_dir(ONBOARD_LED_PIN, GPIO_OUT);
+    gpio_put(ONBOARD_LED_PIN, 0);
 
-    gpio_init(STATUS_LED_PIN2);
-    gpio_set_dir(STATUS_LED_PIN2, GPIO_OUT);
-    gpio_put(STATUS_LED_PIN2, 0);
+    // // Status LED
+    // gpio_init(STATUS_LED_PIN);
+    // gpio_set_dir(STATUS_LED_PIN, GPIO_OUT);
+    // gpio_put(STATUS_LED_PIN, 0);
+
+    // gpio_init(STATUS_LED_PIN2);
+    // gpio_set_dir(STATUS_LED_PIN2, GPIO_OUT);
+    // gpio_put(STATUS_LED_PIN2, 0);
 
     // Gameboy video signal inputs
     gpio_init(VSYNC_PIN);
@@ -499,7 +512,7 @@ static void gpio_callback(uint gpio, uint32_t events)
             gpio_put(BUTTONS_LEFT_B_PIN, button_states[BUTTON_LEFT]);
             gpio_put(BUTTONS_UP_SELECT_PIN, button_states[BUTTON_UP]);
             gpio_put(BUTTONS_DOWN_START_PIN, button_states[BUTTON_DOWN]);
-            gpio_put(STATUS_LED_PIN, button_states[BUTTON_RIGHT]);
+            //gpio_put(STATUS_LED_PIN, button_states[BUTTON_RIGHT]);
         }
     }
 
@@ -512,7 +525,8 @@ static void gpio_callback(uint gpio, uint32_t events)
                 gpio_put(BUTTONS_LEFT_B_PIN, button_states[BUTTON_B]);
                 gpio_put(BUTTONS_UP_SELECT_PIN, button_states[BUTTON_SELECT]);
                 gpio_put(BUTTONS_DOWN_START_PIN, button_states[BUTTON_START]);
-                gpio_put(STATUS_LED_PIN2, button_states[BUTTON_START]);
+                //gpio_put(STATUS_LED_PIN2, button_states[BUTTON_START]);
+                gpio_put(ONBOARD_LED_PIN, button_states[BUTTON_START]);
         }
     }
 
