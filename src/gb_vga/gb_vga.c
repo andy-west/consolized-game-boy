@@ -15,7 +15,8 @@
 #include "pico/sync.h"
 #include "hardware/vreg.h"
 
-#define vga_mode vga_mode_320x240_60
+#define VGA_MODE vga_mode_640x480_60
+#define MIN_RUN 3
 
 //#define COLOR_CHANGE_PIN        11
 #define ONBOARD_LED_PIN         25
@@ -50,14 +51,35 @@
 #define BUTTON_LEFT             6
 #define BUTTON_RIGHT            7
 
+// Game area will be 480x432 
+#define PIXELS_X                (160)
+#define PIXELS_Y                (144)
+#define PIXEL_SCALE             (3)
+#define PIXEL_COUNT             (PIXELS_X*PIXELS_Y)
+#define BORDER_HORZ             (80)    
+#define BORDER_VERT             (24)
+
 #define RGB888_TO_RGB222(r, g, b) ((((b)>>6u)<<PICO_SCANVIDEO_PIXEL_BSHIFT)|(((g)>>6u)<<PICO_SCANVIDEO_PIXEL_GSHIFT)|(((r)>>6u)<<PICO_SCANVIDEO_PIXEL_RSHIFT))
 
-void core1_func();
+
+typedef void (*draw_callback_t)(scanvideo_scanline_buffer_t *buffer);
 
 static semaphore_t video_initted;
 static volatile uint button_states[8];
 static volatile uint8_t buttons_state = 0xFF;
 static uint8_t color_offset = 0;
+
+static uint8_t framebuffer[PIXEL_COUNT];
+
+static draw_callback_t draw_callback;
+
+static bool scanlines_enabled = true;
+
+// map gb pixel to screen pixel
+static uint8_t indexes_x[PIXELS_X*PIXEL_SCALE];
+static uint8_t indexes_y[PIXELS_Y*PIXEL_SCALE];
+
+static uint16_t background_color = RGB888_TO_RGB222(0xFF, 0x00, 0x00);
 
 static uint16_t colors[] = {
     // Black and white
@@ -283,17 +305,24 @@ static uint16_t colors[] = {
     RGB888_TO_RGB222(0x42, 0x51, 0x29)
 };
 
-static uint8_t framebuffer[160 * 144];
-
-static void draw_frame_buffer(scanvideo_scanline_buffer_t *buffer);
+static void core1_func();
+static void render_scanline(scanvideo_scanline_buffer_t *buffer);
 static void initialize_gpio(void);
 static void video_stuff();
 static void nes_controller();
 static void gpio_callback(uint gpio, uint32_t events);
-static void color_change_check(void);
+static void command_check(void);
+static long map(long x, long in_min, long in_max, long out_min, long out_max);
+static void set_indexes(void);
+//static void blink();
+
+int32_t single_solid_line(uint32_t *buf, size_t buf_length, uint16_t color);
+int32_t single_scanline(uint32_t *buf, size_t buf_length, uint8_t mapped_y);
 
 int main(void) 
 {
+    draw_callback = render_scanline;
+
     hw_set_bits(&vreg_and_chip_reset_hw->vreg, VREG_AND_CHIP_RESET_VREG_VSEL_BITS);
     sleep_ms(10);
 
@@ -318,18 +347,19 @@ int main(void)
         button_states[i] = 1;
     }
 
-
-
+    set_indexes();
 
     while (true) 
     {
         video_stuff();
         nes_controller();
-        color_change_check();
-
-    
-
+        command_check();
     }
+}
+
+static long map(long x, long in_min, long in_max, long out_min, long out_max)
+{
+  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
 static void video_stuff()
@@ -343,7 +373,7 @@ static void video_stuff()
 
     vsync_reset = false;
 
-    for (int y = 0; y < 144; y++) {
+    for (int y = 0; y < PIXELS_Y; y++) {
         while (gpio_get(HSYNC_PIN) == 0);
         while (gpio_get(HSYNC_PIN) == 1);
 
@@ -352,7 +382,7 @@ static void video_stuff()
         // asm volatile("nop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\n");
         *p++ = (gpio_get(DATA_0_PIN) << 1) + gpio_get(DATA_1_PIN);
         
-        for (int x = 0; x < 159; x++) {
+        for (int x = 0; x < (PIXELS_X-1); x++) {
             while (gpio_get(PIXEL_CLOCK_PIN) == 0);
             while (gpio_get(PIXEL_CLOCK_PIN) == 1);
 
@@ -365,38 +395,126 @@ static void video_stuff()
     }
 }
 
-static void draw_frame_buffer(scanvideo_scanline_buffer_t *buffer) 
+int32_t single_scanline(uint32_t *buf, size_t buf_length, uint8_t mapped_y)
 {
-    uint y = scanvideo_scanline_number(buffer->scanline_id);
-    uint16_t *p = (uint16_t *) buffer->data;
+    uint16_t *p16 = (uint16_t *) buf;
+    uint16_t *first_pixel;
 
-    uint8_t *pbuff = &framebuffer[((int)(y * 0.6)) * 160];
+    // LEFT BORDER
+    *p16++ = COMPOSABLE_COLOR_RUN;
+    *p16++ = background_color;
+    *p16++ = BORDER_HORZ - MIN_RUN - 1;
 
-    *p++ = COMPOSABLE_RAW_RUN;
-    *p++ = colors[(*pbuff) + color_offset];
-    *p++ = 320 - 3;
-    *p++ = colors[(*pbuff++) + color_offset];
+    // PLAY AREA
+    *p16++ = COMPOSABLE_RAW_RUN;
+    first_pixel = p16;
+    *p16++ = RGB888_TO_RGB222(0x00, 0xFF, 0x00); //replace later - first pixel
+    *p16++ = PIXELS_X*PIXEL_SCALE - MIN_RUN;
+    
+    uint8_t *pbuff = &framebuffer[mapped_y * PIXELS_X];
+    uint8_t mapped_x;
+    //uint8_t mapped_x_last = 0;
 
-    for (uint x = 1; x < 160; x++) {
-       *p++ = colors[(*pbuff) + color_offset];
-       *p++ = colors[(*pbuff++) + color_offset];
+    int pos = 0;
+    int x,i;
+    for (x = 0; x < PIXELS_X; x++)
+    {
+        for (i = 0; i < PIXEL_SCALE; i++)
+        {
+            if (x == 0 && i == 0)
+            {
+                *first_pixel = RGB888_TO_RGB222(0x00, 0x00, 0x00); //colors[*(pbuff) + color_offset];
+            }
+            else
+            {
+                mapped_x = indexes_x[pos++];
+                uint16_t color = colors[*(pbuff) + color_offset]; 
+                if (scanlines_enabled && i == 2)
+                {
+                    color = RGB888_TO_RGB222(0x00, 0x00, 0x00);
+                }
+                *p16++ = color; 
+            }
+        }
+        pbuff++;
     }
+   
+    // RIGHT BORDER
+    *p16++ = COMPOSABLE_COLOR_RUN;
+    *p16++ = background_color; 
+    *p16++ = BORDER_HORZ - MIN_RUN;
 
-    *p++ = COMPOSABLE_RAW_1P;
-    *p++ = 0;
+    // black pixel to end line
+    *p16++ = COMPOSABLE_RAW_1P;
+    *p16++ = 0;
 
-    // End of line with alignment padding
-    *p++ = COMPOSABLE_EOL_SKIP_ALIGN;
-    *p++ = 0;
+    *p16++ = COMPOSABLE_EOL_ALIGN;
 
-    buffer->data_used = ((uint32_t *) p) - buffer->data;
-
-    buffer->status = SCANLINE_OK;
+    return ((uint32_t *) p16) - buf;
 }
 
-void core1_func() {
+int32_t single_solid_line(uint32_t *buf, size_t buf_length, uint16_t color)
+{
+    uint16_t *p16 = (uint16_t *) buf;
+
+    // LEFT BORDER
+    *p16++ = COMPOSABLE_COLOR_RUN;
+    *p16++ = background_color; 
+    *p16++ = BORDER_HORZ - MIN_RUN - 1;
+
+    *p16++ = COMPOSABLE_COLOR_RUN;
+    *p16++ = color; 
+    *p16++ = PIXELS_X*PIXEL_SCALE - MIN_RUN;
+
+    //RIGHT BORDER
+    *p16++ = COMPOSABLE_COLOR_RUN;
+    *p16++ = background_color; 
+    *p16++ = BORDER_HORZ - MIN_RUN;
+
+    // black pixel to end line
+    *p16++ = COMPOSABLE_RAW_1P;
+    *p16++ = 0;
+
+    *p16++ = COMPOSABLE_EOL_ALIGN;
+    
+    return ((uint32_t *) p16) - buf;
+}
+
+static void render_scanline(scanvideo_scanline_buffer_t *dest) 
+{
+    uint32_t *buf = dest->data;
+    size_t buf_length = dest->data_max;
+    int line_num = scanvideo_scanline_number(dest->scanline_id);
+       
+    if (line_num < (BORDER_VERT) || line_num >= (PIXELS_Y*PIXEL_SCALE + BORDER_VERT))
+    {
+         dest->data_used = single_solid_line(buf, buf_length, background_color);
+    }
+    else
+    {
+        
+        if (scanlines_enabled && line_num % PIXEL_SCALE == 0)
+        {
+            dest->data_used = single_solid_line(buf, buf_length, RGB888_TO_RGB222(0x00, 0x00, 0x00));
+        }
+        else
+        {
+            uint8_t mapped_y = indexes_y[line_num-BORDER_VERT];
+            dest->data_used = single_scanline(buf, buf_length, mapped_y);
+        }
+    }
+
+    dest->status = SCANLINE_OK;
+}
+
+
+static void core1_func() 
+{
+    
+    hard_assert(VGA_MODE.width + 4 <= PICO_SCANVIDEO_MAX_SCANLINE_BUFFER_WORDS * 2);    
+
     // Initialize video and interrupts on core 1.
-    scanvideo_setup(&vga_mode);
+    scanvideo_setup(&VGA_MODE);
     scanvideo_timing_enable(true);
     sem_release(&video_initted);
 
@@ -406,7 +524,7 @@ void core1_func() {
     while (true) 
     {
         scanvideo_scanline_buffer_t *scanline_buffer = scanvideo_begin_scanline_generation(true);
-        draw_frame_buffer(scanline_buffer);
+        draw_callback(scanline_buffer);
         scanvideo_end_scanline_generation(scanline_buffer);
     }
 }
@@ -476,6 +594,19 @@ static void initialize_gpio(void)
     gpio_set_dir(BUTTONS_OTHER_PIN, GPIO_IN);
 }
 
+// static void blink()
+// {
+//     static bool state = true;
+//     static uint32_t last_us = 0;
+//     uint32_t current_us = time_us_32();
+//     if (current_us - last_us > 200000)
+//     {
+//         state = !state;
+//         gpio_put(ONBOARD_LED_PIN, state);
+//         last_us = current_us;
+//     }
+// }
+
 static void nes_controller()
 {
     static uint32_t last_micros = 0;
@@ -499,10 +630,15 @@ static void nes_controller()
         gpio_put(PULSE_PIN, 0);
         sleep_us(25);
     }
+
+    //gpio_put(ONBOARD_LED_PIN, button_states[BUTTON_START]);
+    //gpio_put(ONBOARD_LED_PIN, 0);
 }
 
 static void gpio_callback(uint gpio, uint32_t events) 
 {
+                        //blink();
+
     if(gpio==BUTTONS_DPAD_PIN)
     {
         // Send DPAD on falling
@@ -537,20 +673,33 @@ static void gpio_callback(uint gpio, uint32_t events)
         gpio_put(BUTTONS_LEFT_B_PIN, 1);
         gpio_put(BUTTONS_UP_SELECT_PIN, 1);
         gpio_put(BUTTONS_DOWN_START_PIN, 1);
+
     }
 }
 
-static void color_change_check(void)
+static void command_check(void)
 {
-    static uint8_t previous_color_change = false;
-    bool color_change = button_states[BUTTON_SELECT] == 0 && (button_states[BUTTON_RIGHT] == 0 || button_states[BUTTON_LEFT] == 0 );
-
+    static uint8_t previous_command_check = false;
     uint8_t max_offset = sizeof(colors)/sizeof(colors[0]) - 4;
     uint8_t min_offset = 0;
 
-    if (color_change && !previous_color_change) 
+    bool command_check = button_states[BUTTON_SELECT] == 0 
+        && (button_states[BUTTON_DOWN] == 0 
+            || button_states[BUTTON_UP] == 0 
+            || button_states[BUTTON_LEFT] == 0 
+            || button_states[BUTTON_RIGHT] == 0 );
+
+    if (command_check && !previous_command_check) 
     {
-        if (button_states[BUTTON_LEFT] == 0)
+        if (button_states[BUTTON_DOWN] == 0)
+        {
+            scanlines_enabled = !scanlines_enabled;
+        }
+        else if (button_states[BUTTON_UP] == 0)
+        {
+            // nothing for now
+        }
+        else if (button_states[BUTTON_LEFT] == 0)
         {
             if (color_offset == 0)
             {
@@ -574,5 +723,30 @@ static void color_change_check(void)
         }
     }
 
-    previous_color_change = color_change;
+    previous_command_check = command_check;
+}
+
+static void set_indexes(void)
+{
+    int i;
+    uint16_t n = 0;
+
+    uint16_t x;
+    for (x = 0; x < PIXELS_X; x++)
+    {
+        for (i = 0; i < PIXEL_SCALE; i++) 
+        {
+            indexes_x[n++] = x;
+        }
+    }
+
+    n = 0;
+    uint16_t y;
+    for (y = 0; y < PIXELS_Y; y++)
+    {
+        for (i = 0; i < PIXEL_SCALE; i++) 
+        {
+            indexes_y[n++] = y;
+        }
+    }
 }
