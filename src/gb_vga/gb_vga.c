@@ -61,7 +61,7 @@
 
 #define RGB888_TO_RGB222(r, g, b) ((((b)>>6u)<<PICO_SCANVIDEO_PIXEL_BSHIFT)|(((g)>>6u)<<PICO_SCANVIDEO_PIXEL_GSHIFT)|(((r)>>6u)<<PICO_SCANVIDEO_PIXEL_RSHIFT))
 
-
+// I might remove this later -- in testing I use it to swap callbacks on the fly
 typedef void (*draw_callback_t)(scanvideo_scanline_buffer_t *buffer);
 
 static semaphore_t video_initted;
@@ -80,6 +80,7 @@ static uint8_t indexes_x[PIXELS_X*PIXEL_SCALE];
 static uint8_t indexes_y[PIXELS_Y*PIXEL_SCALE];
 
 static uint16_t background_color = RGB888_TO_RGB222(0xFF, 0x00, 0x00);
+static uint16_t scanline_color = RGB888_TO_RGB222(0x00, 0x00, 0x00);
 
 static uint16_t colors[] = {
     // Black and white
@@ -311,6 +312,8 @@ static void initialize_gpio(void);
 static void video_stuff();
 static void nes_controller();
 static void gpio_callback(uint gpio, uint32_t events);
+static void change_color_offset(int direction);
+static void change_scanline_color(int increment);
 static void command_check(void);
 static long map(long x, long in_min, long in_max, long out_min, long out_max);
 static void set_indexes(void);
@@ -348,6 +351,8 @@ int main(void)
     }
 
     set_indexes();
+
+    change_scanline_color(0);
 
     while (true) 
     {
@@ -431,7 +436,7 @@ int32_t single_scanline(uint32_t *buf, size_t buf_length, uint8_t mapped_y)
                 uint16_t color = colors[*(pbuff) + color_offset]; 
                 if (scanlines_enabled && i == 2)
                 {
-                    color = RGB888_TO_RGB222(0x00, 0x00, 0x00);
+                    color = scanline_color;
                 }
                 *p16++ = color; 
             }
@@ -495,7 +500,7 @@ static void render_scanline(scanvideo_scanline_buffer_t *dest)
         
         if (scanlines_enabled && line_num % PIXEL_SCALE == 0)
         {
-            dest->data_used = single_solid_line(buf, buf_length, RGB888_TO_RGB222(0x00, 0x00, 0x00));
+            dest->data_used = single_solid_line(buf, buf_length, scanline_color);
         }
         else
         {
@@ -677,12 +682,27 @@ static void gpio_callback(uint gpio, uint32_t events)
     }
 }
 
+static void change_color_offset(int direction)
+{
+    int max_offset = sizeof(colors)/sizeof(colors[0]) - 4;
+    color_offset += direction * 4;
+    color_offset = color_offset > max_offset ? 0 : color_offset;
+    color_offset = color_offset < 0 ? max_offset : color_offset;
+}
+
+static void change_scanline_color(int increment)
+{
+    static int scanline_color_offset = 0;
+    scanline_color_offset += increment;
+    scanline_color_offset = scanline_color_offset > 3 ? 0 : scanline_color_offset;
+    scanline_color = colors[color_offset + scanline_color_offset];
+}
+
 static void command_check(void)
 {
     static uint8_t previous_command_check = false;
-    uint8_t max_offset = sizeof(colors)/sizeof(colors[0]) - 4;
-    uint8_t min_offset = 0;
-
+    
+    
     bool command_check = button_states[BUTTON_SELECT] == 0 
         && (button_states[BUTTON_DOWN] == 0 
             || button_states[BUTTON_UP] == 0 
@@ -693,33 +713,28 @@ static void command_check(void)
     {
         if (button_states[BUTTON_DOWN] == 0)
         {
-            scanlines_enabled = !scanlines_enabled;
+            scanlines_enabled = false;
+
         }
         else if (button_states[BUTTON_UP] == 0)
         {
-            // nothing for now
+            if (scanlines_enabled)
+            {
+                change_scanline_color(1);
+            }
+            else
+            {
+                scanlines_enabled = true;
+            }
+            
         }
         else if (button_states[BUTTON_LEFT] == 0)
         {
-            if (color_offset == 0)
-            {
-                color_offset = max_offset;
-            }
-            else
-            {
-                color_offset -= 4;
-            }
+            change_color_offset(-1);
         }
         else if (button_states[BUTTON_RIGHT] == 0)
         {
-            if (color_offset == max_offset)
-            {
-                color_offset = 0;
-            }
-            else
-            {
-                color_offset += 4;
-            }
+            change_color_offset(1);
         }
     }
 
