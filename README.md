@@ -12,7 +12,7 @@ Notable changes:
  - 3x scale maintaining aspect ratio
  - Added option to enable scanlines (select+up to cycle scanline color, select+down to disable)
 
-[![Video sample]](https://youtu.be/khdu8cWNxHo)
+[Video sample](https://youtu.be/khdu8cWNxHo)
 
 
 Check out Andy's video!  
