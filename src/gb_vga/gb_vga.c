@@ -61,6 +61,14 @@
 
 #define RGB888_TO_RGB222(r, g, b) ((((b)>>6u)<<PICO_SCANVIDEO_PIXEL_BSHIFT)|(((g)>>6u)<<PICO_SCANVIDEO_PIXEL_GSHIFT)|(((r)>>6u)<<PICO_SCANVIDEO_PIXEL_RSHIFT))
 
+typedef enum
+{
+    VIDEO_EFFECT_NONE = 0,
+    VIDEO_EFFECT_PIXEL_EFFECT,
+    VIDEO_EFFECT_SCANLINES,
+    VIDEO_EFFECT_COUNT
+} video_effect_t;
+
 // I might remove this later -- in testing I use it to swap callbacks on the fly
 typedef void (*draw_callback_t)(scanvideo_scanline_buffer_t *buffer);
 
@@ -73,7 +81,7 @@ static uint8_t framebuffer[PIXEL_COUNT];
 
 static draw_callback_t draw_callback;
 
-static bool scanlines_enabled = true;
+static video_effect_t video_effect = VIDEO_EFFECT_NONE;
 
 // map gb pixel to screen pixel
 static uint8_t indexes_x[PIXELS_X*PIXEL_SCALE];
@@ -331,7 +339,8 @@ int main(void)
 
     set_sys_clock_khz(300000, true);
 
-    //stdio_init_all();
+
+
 
     // Create a semaphore to be posted when video init is complete.
     sem_init(&video_initted, 0, 1);
@@ -434,7 +443,7 @@ int32_t single_scanline(uint32_t *buf, size_t buf_length, uint8_t mapped_y)
             {
                 mapped_x = indexes_x[pos++];
                 uint16_t color = colors[*(pbuff) + color_offset]; 
-                if (scanlines_enabled && i == 2)
+                if ((video_effect == VIDEO_EFFECT_PIXEL_EFFECT) && i == 2)
                 {
                     color = scanline_color;
                 }
@@ -497,8 +506,8 @@ static void render_scanline(scanvideo_scanline_buffer_t *dest)
     }
     else
     {
-        
-        if (scanlines_enabled && line_num % PIXEL_SCALE == 0)
+        if ((video_effect == VIDEO_EFFECT_PIXEL_EFFECT || video_effect == VIDEO_EFFECT_SCANLINES)
+            &&  line_num % PIXEL_SCALE == 0)
         {
             dest->data_used = single_solid_line(buf, buf_length, scanline_color);
         }
@@ -667,7 +676,7 @@ static void gpio_callback(uint gpio, uint32_t events)
                 gpio_put(BUTTONS_UP_SELECT_PIN, button_states[BUTTON_SELECT]);
                 gpio_put(BUTTONS_DOWN_START_PIN, button_states[BUTTON_START]);
                 //gpio_put(STATUS_LED_PIN2, button_states[BUTTON_START]);
-                gpio_put(ONBOARD_LED_PIN, button_states[BUTTON_START]);
+                //gpio_put(ONBOARD_LED_PIN, button_states[BUTTON_START]);
         }
     }
 
@@ -713,18 +722,19 @@ static void command_check(void)
     {
         if (button_states[BUTTON_DOWN] == 0)
         {
-            scanlines_enabled = false;
-
+            //pixel_effect_enabled = false;
+            video_effect++;
+            video_effect = video_effect >= VIDEO_EFFECT_COUNT ? VIDEO_EFFECT_NONE : video_effect;
         }
         else if (button_states[BUTTON_UP] == 0)
         {
-            if (scanlines_enabled)
+            if (video_effect == VIDEO_EFFECT_PIXEL_EFFECT)
             {
                 change_scanline_color(1);
             }
             else
             {
-                scanlines_enabled = true;
+                video_effect = video_effect > 0 ? video_effect-1 : VIDEO_EFFECT_COUNT-1;
             }
             
         }
