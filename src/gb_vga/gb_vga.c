@@ -14,14 +14,17 @@
 #include "pico/scanvideo/composable_scanline.h"
 #include "pico/sync.h"
 #include "hardware/vreg.h"
+#include "pico/stdio.h"
+#include "osd.h"
 
 #define VGA_MODE vga_mode_640x480_60
 #define MIN_RUN 3
 
 //#define COLOR_CHANGE_PIN        11
 #define ONBOARD_LED_PIN         25
-#define STATUS_LED_PIN          12
-#define STATUS_LED_PIN2         13
+//#define STATUS_LED_PIN          12
+//#define STATUS_LED_PIN2         13
+#define GAMEBOY_RESET_PIN          12   //TODO:  probably use GP14
 
 // GAMEBOY VIDEO INPUT (From level shifter)
 #define VSYNC_PIN               19
@@ -42,15 +45,6 @@
 #define BUTTONS_UP_SELECT_PIN   26
 #define BUTTONS_RIGHT_A_PIN     22
 
-#define BUTTON_A                0
-#define BUTTON_B                1
-#define BUTTON_SELECT           2
-#define BUTTON_START            3
-#define BUTTON_UP               4
-#define BUTTON_DOWN             5
-#define BUTTON_LEFT             6
-#define BUTTON_RIGHT            7
-
 // Game area will be 480x432 
 #define PIXELS_X                (160)
 #define PIXELS_Y                (144)
@@ -63,31 +57,51 @@
 
 typedef enum
 {
+    BUTTON_A = 0,
+    BUTTON_B,
+    BUTTON_SELECT,
+    BUTTON_START,
+    BUTTON_UP,
+    BUTTON_DOWN,
+    BUTTON_LEFT,
+    BUTTON_RIGHT,
+    BUTTON_COUNT
+} controller_button_t;
+
+typedef enum
+{
     VIDEO_EFFECT_NONE = 0,
     VIDEO_EFFECT_PIXEL_EFFECT,
     VIDEO_EFFECT_SCANLINES,
     VIDEO_EFFECT_COUNT
 } video_effect_t;
 
-// I might remove this later -- in testing I use it to swap callbacks on the fly
-typedef void (*draw_callback_t)(scanvideo_scanline_buffer_t *buffer);
+typedef enum
+{
+    OSD_LINE_COLOR_SCHEME = 0,
+    OSD_LINE_EFFECTS,
+    OSD_LINE_FX_SCHEME,
+    OSD_LINE_RESET_GAMEBOY,
+    OSD_LINE_EXIT,
+    OSD_LINE_COUNT
+} osd_line_t;
 
 static semaphore_t video_initted;
-static volatile uint button_states[8];
+static volatile uint button_states[BUTTON_COUNT];
+static uint button_states_previous[BUTTON_COUNT];
 static volatile uint8_t buttons_state = 0xFF;
-static uint8_t color_offset = 0;
+static int color_offset = 0;
+static int scanline_color_offset = 0;
+static int video_effect = VIDEO_EFFECT_NONE;
 
 static uint8_t framebuffer[PIXEL_COUNT];
-
-static draw_callback_t draw_callback;
-
-static video_effect_t video_effect = VIDEO_EFFECT_NONE;
+static uint8_t osd_framebuffer[OSD_HEIGHT*OSD_WIDTH] = {0};
 
 // map gb pixel to screen pixel
 static uint8_t indexes_x[PIXELS_X*PIXEL_SCALE];
 static uint8_t indexes_y[PIXELS_Y*PIXEL_SCALE];
 
-static uint16_t background_color = RGB888_TO_RGB222(0xFF, 0x00, 0x00);
+static uint16_t background_color = RGB888_TO_RGB222(0x00, 0x00, 0xFF);
 static uint16_t scanline_color = RGB888_TO_RGB222(0x00, 0x00, 0x00);
 
 static uint16_t colors[] = {
@@ -321,10 +335,15 @@ static void video_stuff();
 static void nes_controller();
 static void gpio_callback(uint gpio, uint32_t events);
 static void change_color_offset(int direction);
+static void change_video_effect(int increment);
 static void change_scanline_color(int increment);
 static void command_check(void);
+static bool button_is_pressed(controller_button_t button);
+static bool button_was_released(controller_button_t button);
 static long map(long x, long in_min, long in_max, long out_min, long out_max);
 static void set_indexes(void);
+static void update_osd(void);
+static void gameboy_reset();
 //static void blink();
 
 int32_t single_solid_line(uint32_t *buf, size_t buf_length, uint16_t color);
@@ -340,8 +359,6 @@ int main(void)
     set_sys_clock_khz(300000, true);
 
 
-
-
     // Create a semaphore to be posted when video init is complete.
     sem_init(&video_initted, 0, 1);
 
@@ -354,15 +371,19 @@ int main(void)
     initialize_gpio();
 
     // Clear all button states
-    for (int i = 0; i < 8; i++) 
+    for (int i = 0; i < BUTTON_COUNT; i++) 
     {
         button_states[i] = 1;
+        button_states_previous[i] = 1;
     }
 
     set_indexes();
 
     change_scanline_color(0);
 
+    OSD_init(osd_framebuffer);
+    update_osd();
+    
     while (true) 
     {
         video_stuff();
@@ -391,9 +412,6 @@ static void video_stuff()
         while (gpio_get(HSYNC_PIN) == 0);
         while (gpio_get(HSYNC_PIN) == 1);
 
-        //busy_wait_us ? 
-        // asm volatile("nop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\n");
-        // asm volatile("nop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\n");
         *p++ = (gpio_get(DATA_0_PIN) << 1) + gpio_get(DATA_1_PIN);
         
         for (int x = 0; x < (PIXELS_X-1); x++) {
@@ -422,17 +440,32 @@ int32_t single_scanline(uint32_t *buf, size_t buf_length, uint8_t mapped_y)
     // PLAY AREA
     *p16++ = COMPOSABLE_RAW_RUN;
     first_pixel = p16;
-    *p16++ = RGB888_TO_RGB222(0x00, 0xFF, 0x00); //replace later - first pixel
+    *p16++ = RGB888_TO_RGB222(0x00, 0xFF, 0x00); // replaced later - first pixel
     *p16++ = PIXELS_X*PIXEL_SCALE - MIN_RUN;
     
     uint8_t *pbuff = &framebuffer[mapped_y * PIXELS_X];
-    uint8_t mapped_x;
-    //uint8_t mapped_x_last = 0;
 
     int pos = 0;
     int x,i;
+    uint16_t color = 0;
+    uint8_t osd_start_x = (PIXELS_X - OSD_get_width())/2;
+    uint8_t osd_end_x = osd_start_x + OSD_get_width();
+    uint8_t osd_start_y = (PIXELS_Y - OSD_get_height())/2;
+    uint8_t osd_end_y = osd_start_y + OSD_get_height();
+    uint osd_char_index = 0;
+    uint8_t pixels = 0;
+    bool in_osd = false;
+    int osd_pos = 0;
+    bool osd_row = OSD_is_enabled() & (mapped_y >= osd_start_y) & (mapped_y < osd_end_y);
+
+    uint16_t nnn = (mapped_y - osd_start_y) * OSD_WIDTH;
     for (x = 0; x < PIXELS_X; x++)
     {
+        if (osd_row && (osd_pos >= 0))
+        {
+            in_osd = x >= osd_start_x && x < osd_end_x;
+        }
+
         for (i = 0; i < PIXEL_SCALE; i++)
         {
             if (x == 0 && i == 0)
@@ -441,15 +474,38 @@ int32_t single_scanline(uint32_t *buf, size_t buf_length, uint8_t mapped_y)
             }
             else
             {
-                mapped_x = indexes_x[pos++];
-                uint16_t color = colors[*(pbuff) + color_offset]; 
-                if ((video_effect == VIDEO_EFFECT_PIXEL_EFFECT) && i == 2)
+                if (in_osd )
                 {
-                    color = scanline_color;
+                    color = (uint16_t)(osd_framebuffer[nnn + osd_pos]);
                 }
+                else
+                {
+                    // if pixel-effect enabled & 3rd pixel...
+                    if ((video_effect == VIDEO_EFFECT_PIXEL_EFFECT) && i == 2)
+                    {
+                        color = scanline_color;
+                    }
+                    else
+                    {
+                        color = colors[*(pbuff) + (uint8_t)color_offset]; 
+                    }
+                }
+
                 *p16++ = color; 
             }
         }
+        if (in_osd)
+        {
+            osd_pos++;
+        //     px++;
+            // if (osd_pos % 6 == 0)
+            //     osd_char_index++;
+
+            // if (osd_char_index > 1)
+            //     osd_char_index = 0;
+        }
+        
+
         pbuff++;
     }
    
@@ -538,7 +594,7 @@ static void core1_func()
     while (true) 
     {
         scanvideo_scanline_buffer_t *scanline_buffer = scanvideo_begin_scanline_generation(true);
-        draw_callback(scanline_buffer);
+        render_scanline(scanline_buffer);
         scanvideo_end_scanline_generation(scanline_buffer);
     }
 }
@@ -558,6 +614,12 @@ static void initialize_gpio(void)
     // gpio_init(STATUS_LED_PIN2);
     // gpio_set_dir(STATUS_LED_PIN2, GPIO_OUT);
     // gpio_put(STATUS_LED_PIN2, 0);
+
+    
+    // Gameboy Reset
+    gpio_init(GAMEBOY_RESET_PIN);
+    gpio_set_dir(GAMEBOY_RESET_PIN, GPIO_OUT);
+    gpio_put(GAMEBOY_RESET_PIN, 1);
 
     // Gameboy video signal inputs
     gpio_init(VSYNC_PIN);
@@ -651,7 +713,11 @@ static void nes_controller()
 
 static void gpio_callback(uint gpio, uint32_t events) 
 {
-                        //blink();
+    // Prevent controller input to game if OSD is visible
+    if (OSD_is_enabled())
+        return;
+
+    //blink();
 
     if(gpio==BUTTONS_DPAD_PIN)
     {
@@ -699,56 +765,87 @@ static void change_color_offset(int direction)
     color_offset = color_offset < 0 ? max_offset : color_offset;
 }
 
+static void change_video_effect(int increment)
+{
+    video_effect += increment;
+    video_effect = video_effect >= VIDEO_EFFECT_COUNT ? VIDEO_EFFECT_NONE : video_effect;
+    video_effect = video_effect < 0 ? VIDEO_EFFECT_COUNT-1 : video_effect;
+}
+
 static void change_scanline_color(int increment)
 {
-    static int scanline_color_offset = 0;
     scanline_color_offset += increment;
     scanline_color_offset = scanline_color_offset > 3 ? 0 : scanline_color_offset;
+    scanline_color_offset = scanline_color_offset < 0 ? 3 : scanline_color_offset;
     scanline_color = colors[color_offset + scanline_color_offset];
+}
+
+static bool button_is_pressed(controller_button_t button)
+{
+    return button_states[button] == 0;
+}
+
+static bool button_was_released(controller_button_t button)
+{
+    return button_states[button] == 1 && button_states_previous[button] == 0;
 }
 
 static void command_check(void)
 {
-    static uint8_t previous_command_check = false;
-    
-    
-    bool command_check = button_states[BUTTON_SELECT] == 0 
-        && (button_states[BUTTON_DOWN] == 0 
-            || button_states[BUTTON_UP] == 0 
-            || button_states[BUTTON_LEFT] == 0 
-            || button_states[BUTTON_RIGHT] == 0 );
-
-    if (command_check && !previous_command_check) 
+    if (button_is_pressed(BUTTON_SELECT))
     {
-        if (button_states[BUTTON_DOWN] == 0)
+        // select pressed
+        if (button_was_released(BUTTON_START))
+            OSD_toggle();
+    }
+    else
+    {
+        // select not pressed
+        if (OSD_is_enabled())
         {
-            //pixel_effect_enabled = false;
-            video_effect++;
-            video_effect = video_effect >= VIDEO_EFFECT_COUNT ? VIDEO_EFFECT_NONE : video_effect;
-        }
-        else if (button_states[BUTTON_UP] == 0)
-        {
-            if (video_effect == VIDEO_EFFECT_PIXEL_EFFECT)
+            if (button_was_released(BUTTON_DOWN))
             {
-                change_scanline_color(1);
+                OSD_change_line(1);
             }
-            else
+            else if (button_was_released(BUTTON_UP))
             {
-                video_effect = video_effect > 0 ? video_effect-1 : VIDEO_EFFECT_COUNT-1;
+                OSD_change_line(-1);
             }
-            
-        }
-        else if (button_states[BUTTON_LEFT] == 0)
-        {
-            change_color_offset(-1);
-        }
-        else if (button_states[BUTTON_RIGHT] == 0)
-        {
-            change_color_offset(1);
+            else if (button_was_released(BUTTON_RIGHT) 
+                    || button_was_released(BUTTON_LEFT)
+                    || button_was_released(BUTTON_A))
+            {
+                bool leftbtn = button_was_released(BUTTON_LEFT);
+                switch (OSD_get_active_line())
+                {
+                    case OSD_LINE_COLOR_SCHEME:
+                        change_color_offset(leftbtn ? -1 : 1);
+                        update_osd();
+                        break;
+                    case OSD_LINE_EFFECTS:
+                        change_video_effect(leftbtn ? -1 : 1);
+                        update_osd();
+                        break;
+                    case OSD_LINE_FX_SCHEME:
+                        change_scanline_color(leftbtn ? -1 : 1);
+                        update_osd();
+                        break;
+                    case OSD_LINE_RESET_GAMEBOY:
+                        gameboy_reset();
+                        break;
+                    case OSD_LINE_EXIT:
+                        OSD_toggle();
+                        break;
+                }
+            }
         }
     }
 
-    previous_command_check = command_check;
+    
+    for (int i = 0; i < BUTTON_COUNT; i++) 
+    {
+        button_states_previous[i] = button_states[i];
+    }
 }
 
 static void set_indexes(void)
@@ -774,4 +871,47 @@ static void set_indexes(void)
             indexes_y[n++] = y;
         }
     }
+}
+
+static void update_osd(void)
+{
+/*
+------------------
+COLOR SCHEME:   99
+EFFECTS: SCANLINES
+FX SCHEME:       3
+RESET GAMEBOY
+EXIT
+*/
+
+    char buff[32];
+    sprintf(buff, "COLOR SCHEME:% 5d", color_offset/4);
+    OSD_set_line_text(0, buff);
+
+    if (video_effect==VIDEO_EFFECT_SCANLINES)
+    {
+        sprintf(buff, "EFFECTS: SCANLINES");
+    }
+    else if (video_effect==VIDEO_EFFECT_PIXEL_EFFECT)
+    {
+        sprintf(buff, "EFFECTS:    PIXELS");
+    }
+    else
+    {
+        sprintf(buff, "EFFECTS:      NONE");
+    }
+    OSD_set_line_text(1, buff);
+
+    sprintf(buff, "FX SCHEME:% 8d", scanline_color_offset);
+    OSD_set_line_text(2, buff);
+    OSD_set_line_text(3, "RESET GAMEBOY");
+    OSD_set_line_text(4, "EXIT");
+    OSD_update_framebuffer();
+}
+
+static void gameboy_reset()
+{
+    gpio_put(GAMEBOY_RESET_PIN, 0);
+    sleep_ms(50);
+    gpio_put(GAMEBOY_RESET_PIN, 1);
 }
