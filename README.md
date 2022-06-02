@@ -13,6 +13,7 @@ Notable changes:
  - Added option to enable scanlines (select+up to cycle scanline color, select+down to disable)
 
 [Video sample](https://youtu.be/khdu8cWNxHo)
+
 [OSD](https://youtu.be/it27PfHu0o8)
 
 
