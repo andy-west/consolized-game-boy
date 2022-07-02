@@ -1,3 +1,6 @@
+// TODO
+//  save settings???
+
 /*
  * Copyright (c) 2021 Raspberry Pi (Trading) Ltd.
  *
@@ -20,12 +23,16 @@
 #define VGA_MODE vga_mode_640x480_60
 #define MIN_RUN 3
 
-//#define COLOR_CHANGE_PIN        11
 #define ONBOARD_LED_PIN         25
 //#define STATUS_LED_PIN          12
 //#define STATUS_LED_PIN2         13
-#define GAMEBOY_RESET_PIN          12   //TODO:  probably use GP14
 
+// INPUTS (NES Controller, color change pin)
+#define DATA_PIN                8
+#define LATCH_PIN               9
+#define PULSE_PIN               10
+
+#ifdef VERSION_1
 // GAMEBOY VIDEO INPUT (From level shifter)
 #define VSYNC_PIN               19
 #define PIXEL_CLOCK_PIN         18
@@ -33,17 +40,31 @@
 #define DATA_1_PIN              16
 #define HSYNC_PIN               15
 
-// INPUTS (NES Controller, color change pin)
-#define DATA_PIN                8
-#define LATCH_PIN               9
-#define PULSE_PIN               10
-
 #define BUTTONS_DPAD_PIN        21      // P14
 #define BUTTONS_OTHER_PIN       20      // P15
 #define BUTTONS_LEFT_B_PIN      28
 #define BUTTONS_DOWN_START_PIN  27
 #define BUTTONS_UP_SELECT_PIN   26
 #define BUTTONS_RIGHT_A_PIN     22
+
+#define GAMEBOY_RESET_PIN       11
+#else
+// GAMEBOY VIDEO INPUT (From level shifter)
+#define VSYNC_PIN               26
+#define PIXEL_CLOCK_PIN         21
+#define DATA_0_PIN              20
+#define DATA_1_PIN              19
+#define HSYNC_PIN               22
+
+#define BUTTONS_DPAD_PIN        28      // P14
+#define BUTTONS_OTHER_PIN       27      // P15
+#define BUTTONS_LEFT_B_PIN      18
+#define BUTTONS_DOWN_START_PIN  14
+#define BUTTONS_UP_SELECT_PIN   15
+#define BUTTONS_RIGHT_A_PIN     17
+
+#define GAMEBOY_RESET_PIN       16
+#endif
 
 // Game area will be 480x432 
 #define PIXELS_X                (160)
@@ -351,8 +372,6 @@ int32_t single_scanline(uint32_t *buf, size_t buf_length, uint8_t mapped_y);
 
 int main(void) 
 {
-    draw_callback = render_scanline;
-
     hw_set_bits(&vreg_and_chip_reset_hw->vreg, VREG_AND_CHIP_RESET_VREG_VSEL_BITS);
     sleep_ms(10);
 
