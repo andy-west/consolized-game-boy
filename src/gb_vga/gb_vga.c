@@ -24,7 +24,7 @@
 #define MIN_RUN 3
 
 #define ONBOARD_LED_PIN         25
-//#define STATUS_LED_PIN          12
+#define STATUS_LED_PIN          12
 //#define STATUS_LED_PIN2         13
 
 // INPUTS (NES Controller, color change pin)
@@ -76,6 +76,18 @@
 
 #define RGB888_TO_RGB222(r, g, b) ((((b)>>6u)<<PICO_SCANVIDEO_PIXEL_BSHIFT)|(((g)>>6u)<<PICO_SCANVIDEO_PIXEL_GSHIFT)|(((r)>>6u)<<PICO_SCANVIDEO_PIXEL_RSHIFT))
 
+static uint8_t border_colors[] = {
+    RGB888_TO_RGB222(0x00, 0x00, 0xFF), // BLUE
+    RGB888_TO_RGB222(0x00, 0x00, 0x00), // BLACK
+    RGB888_TO_RGB222(0xFF, 0xFF, 0xFF), // WHITE
+    RGB888_TO_RGB222(0x80, 0x80, 0x80), // LIGHT GREY
+    RGB888_TO_RGB222(0x40, 0x40, 0x40), // DARK GREY
+    RGB888_TO_RGB222(0xFF, 0x00, 0x00), // RED
+    RGB888_TO_RGB222(0x00, 0xFF, 0x00), // GREEN
+    RGB888_TO_RGB222(0xFF, 0xFF, 0x00), // YELLOW
+    RGB888_TO_RGB222(0xFF, 0x00, 0xFF), // PURPLE
+};
+
 typedef enum
 {
     BUTTON_A = 0,
@@ -100,6 +112,7 @@ typedef enum
 typedef enum
 {
     OSD_LINE_COLOR_SCHEME = 0,
+    OSD_LINE_BORDER_COLOR,
     OSD_LINE_EFFECTS,
     OSD_LINE_FX_SCHEME,
     OSD_LINE_RESET_GAMEBOY,
@@ -122,7 +135,7 @@ static uint8_t osd_framebuffer[OSD_HEIGHT*OSD_WIDTH] = {0};
 static uint8_t indexes_x[PIXELS_X*PIXEL_SCALE];
 static uint8_t indexes_y[PIXELS_Y*PIXEL_SCALE];
 
-static uint16_t background_color = RGB888_TO_RGB222(0x00, 0x00, 0xFF);
+static int8_t border_color_index = 0;
 static uint16_t scanline_color = RGB888_TO_RGB222(0x00, 0x00, 0x00);
 
 static uint16_t colors[] = {
@@ -356,6 +369,7 @@ static void video_stuff();
 static void nes_controller();
 static void gpio_callback(uint gpio, uint32_t events);
 static void change_color_offset(int direction);
+static void change_border_color_index(int direction);
 static void change_video_effect(int increment);
 static void change_scanline_color(int increment);
 static void command_check(void);
@@ -448,12 +462,12 @@ static void video_stuff()
 
 int32_t single_scanline(uint32_t *buf, size_t buf_length, uint8_t mapped_y)
 {
-    uint16_t *p16 = (uint16_t *) buf;
-    uint16_t *first_pixel;
+    uint16_t* p16 = (uint16_t *) buf;
+    uint16_t* first_pixel;
 
     // LEFT BORDER
     *p16++ = COMPOSABLE_COLOR_RUN;
-    *p16++ = background_color;
+    *p16++ = border_colors[border_color_index];
     *p16++ = BORDER_HORZ - MIN_RUN - 1;
 
     // PLAY AREA
@@ -489,7 +503,7 @@ int32_t single_scanline(uint32_t *buf, size_t buf_length, uint8_t mapped_y)
         {
             if (x == 0 && i == 0)
             {
-                *first_pixel = RGB888_TO_RGB222(0x00, 0x00, 0x00); //colors[*(pbuff) + color_offset];
+                *first_pixel = colors[*(pbuff) + color_offset];
             }
             else
             {
@@ -516,21 +530,14 @@ int32_t single_scanline(uint32_t *buf, size_t buf_length, uint8_t mapped_y)
         if (in_osd)
         {
             osd_pos++;
-        //     px++;
-            // if (osd_pos % 6 == 0)
-            //     osd_char_index++;
-
-            // if (osd_char_index > 1)
-            //     osd_char_index = 0;
         }
-        
 
         pbuff++;
     }
    
     // RIGHT BORDER
     *p16++ = COMPOSABLE_COLOR_RUN;
-    *p16++ = background_color; 
+    *p16++ = border_colors[border_color_index]; 
     *p16++ = BORDER_HORZ - MIN_RUN;
 
     // black pixel to end line
@@ -548,7 +555,7 @@ int32_t single_solid_line(uint32_t *buf, size_t buf_length, uint16_t color)
 
     // LEFT BORDER
     *p16++ = COMPOSABLE_COLOR_RUN;
-    *p16++ = background_color; 
+    *p16++ = border_colors[border_color_index]; 
     *p16++ = BORDER_HORZ - MIN_RUN - 1;
 
     *p16++ = COMPOSABLE_COLOR_RUN;
@@ -557,7 +564,7 @@ int32_t single_solid_line(uint32_t *buf, size_t buf_length, uint16_t color)
 
     //RIGHT BORDER
     *p16++ = COMPOSABLE_COLOR_RUN;
-    *p16++ = background_color; 
+    *p16++ = border_colors[border_color_index]; 
     *p16++ = BORDER_HORZ - MIN_RUN;
 
     // black pixel to end line
@@ -577,7 +584,7 @@ static void render_scanline(scanvideo_scanline_buffer_t *dest)
        
     if (line_num < (BORDER_VERT) || line_num >= (PIXELS_Y*PIXEL_SCALE + BORDER_VERT))
     {
-         dest->data_used = single_solid_line(buf, buf_length, background_color);
+         dest->data_used = single_solid_line(buf, buf_length, border_colors[border_color_index]);
     }
     else
     {
@@ -625,10 +632,10 @@ static void initialize_gpio(void)
     gpio_set_dir(ONBOARD_LED_PIN, GPIO_OUT);
     gpio_put(ONBOARD_LED_PIN, 0);
 
-    // // Status LED
-    // gpio_init(STATUS_LED_PIN);
-    // gpio_set_dir(STATUS_LED_PIN, GPIO_OUT);
-    // gpio_put(STATUS_LED_PIN, 0);
+    // Status LED
+    gpio_init(STATUS_LED_PIN);
+    gpio_set_dir(STATUS_LED_PIN, GPIO_OUT);
+    gpio_put(STATUS_LED_PIN, 0);
 
     // gpio_init(STATUS_LED_PIN2);
     // gpio_set_dir(STATUS_LED_PIN2, GPIO_OUT);
@@ -747,7 +754,6 @@ static void gpio_callback(uint gpio, uint32_t events)
             gpio_put(BUTTONS_LEFT_B_PIN, button_states[BUTTON_LEFT]);
             gpio_put(BUTTONS_UP_SELECT_PIN, button_states[BUTTON_UP]);
             gpio_put(BUTTONS_DOWN_START_PIN, button_states[BUTTON_DOWN]);
-            //gpio_put(STATUS_LED_PIN, button_states[BUTTON_RIGHT]);
         }
     }
 
@@ -756,12 +762,10 @@ static void gpio_callback(uint gpio, uint32_t events)
         // Send BUTTONS on rising
         if (events & (1<<3)) // EDGE HIGH
         {
-                gpio_put(BUTTONS_RIGHT_A_PIN, button_states[BUTTON_A]);
-                gpio_put(BUTTONS_LEFT_B_PIN, button_states[BUTTON_B]);
-                gpio_put(BUTTONS_UP_SELECT_PIN, button_states[BUTTON_SELECT]);
-                gpio_put(BUTTONS_DOWN_START_PIN, button_states[BUTTON_START]);
-                //gpio_put(STATUS_LED_PIN2, button_states[BUTTON_START]);
-                //gpio_put(ONBOARD_LED_PIN, button_states[BUTTON_START]);
+            gpio_put(BUTTONS_RIGHT_A_PIN, button_states[BUTTON_A]);
+            gpio_put(BUTTONS_LEFT_B_PIN, button_states[BUTTON_B]);
+            gpio_put(BUTTONS_UP_SELECT_PIN, button_states[BUTTON_SELECT]);
+            gpio_put(BUTTONS_DOWN_START_PIN, button_states[BUTTON_START]);
         }
     }
 
@@ -782,6 +786,13 @@ static void change_color_offset(int direction)
     color_offset += direction * 4;
     color_offset = color_offset > max_offset ? 0 : color_offset;
     color_offset = color_offset < 0 ? max_offset : color_offset;
+}
+
+static void change_border_color_index(int direction)
+{
+    border_color_index += direction;
+    border_color_index = border_color_index < 0 ? (sizeof(border_colors)-1) : border_color_index;
+    border_color_index = border_color_index >= sizeof(border_colors) ? 0 : border_color_index;
 }
 
 static void change_video_effect(int increment)
@@ -815,7 +826,10 @@ static void command_check(void)
     {
         // select pressed
         if (button_was_released(BUTTON_START))
+        {
             OSD_toggle();
+            gpio_put(STATUS_LED_PIN, OSD_is_enabled() ? 1 : 0);
+        }
     }
     else
     {
@@ -841,6 +855,10 @@ static void command_check(void)
                         change_color_offset(leftbtn ? -1 : 1);
                         update_osd();
                         break;
+                    case OSD_LINE_BORDER_COLOR:
+                        change_border_color_index(leftbtn ? -1 : 1);
+                        update_osd();
+                        break;
                     case OSD_LINE_EFFECTS:
                         change_video_effect(leftbtn ? -1 : 1);
                         update_osd();
@@ -854,6 +872,7 @@ static void command_check(void)
                         break;
                     case OSD_LINE_EXIT:
                         OSD_toggle();
+                        gpio_put(STATUS_LED_PIN, OSD_is_enabled() ? 1 : 0);
                         break;
                 }
             }
@@ -905,7 +924,10 @@ EXIT
 
     char buff[32];
     sprintf(buff, "COLOR SCHEME:% 5d", color_offset/4);
-    OSD_set_line_text(0, buff);
+    OSD_set_line_text(OSD_LINE_COLOR_SCHEME, buff);
+
+    sprintf(buff, "BORDER COLOR:% 5d", border_color_index);
+    OSD_set_line_text(OSD_LINE_BORDER_COLOR, buff);
 
     if (video_effect==VIDEO_EFFECT_SCANLINES)
     {
@@ -919,12 +941,12 @@ EXIT
     {
         sprintf(buff, "EFFECTS:      NONE");
     }
-    OSD_set_line_text(1, buff);
+    OSD_set_line_text(OSD_LINE_EFFECTS, buff);
 
     sprintf(buff, "FX SCHEME:% 8d", scanline_color_offset);
-    OSD_set_line_text(2, buff);
-    OSD_set_line_text(3, "RESET GAMEBOY");
-    OSD_set_line_text(4, "EXIT");
+    OSD_set_line_text(OSD_LINE_FX_SCHEME, buff);
+    OSD_set_line_text(OSD_LINE_RESET_GAMEBOY, "RESET GAMEBOY");
+    OSD_set_line_text(OSD_LINE_EXIT, "EXIT");
     OSD_update_framebuffer();
 }
 
