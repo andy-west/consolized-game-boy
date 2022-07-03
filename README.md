@@ -1,5 +1,4 @@
 # consolized-game-boy
-Code, 3D models, and other files to make a consolized Game Boy
 
 ## Description
 This is a modified version of Andy West's project from *element14 Presents* episode 531: "Game Guy - The Unportable Game Boy".
