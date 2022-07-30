@@ -20,7 +20,13 @@
 #include "pico/stdio.h"
 #include "osd.h"
 
+// #define VGA_213x160_TEST
+
+#ifdef VGA_213x160_TEST
+#define VGA_MODE vga_mode_213x160_60
+#else
 #define VGA_MODE vga_mode_640x480_60
+#endif
 #define MIN_RUN 3
 
 #define ONBOARD_LED_PIN         25
@@ -32,13 +38,16 @@
 #define LATCH_PIN               9
 #define PULSE_PIN               10
 
-#ifdef VERSION_1
+//#define PCB_V1
+#define PCB_V3
+
+#ifdef PCB_V1
 // GAMEBOY VIDEO INPUT (From level shifter)
 #define VSYNC_PIN               19
-#define PIXEL_CLOCK_PIN         18
-#define DATA_0_PIN              17
-#define DATA_1_PIN              16
 #define HSYNC_PIN               15
+#define PIXEL_CLOCK_PIN         18
+#define DATA_1_PIN              16
+#define DATA_0_PIN              17
 
 #define BUTTONS_DPAD_PIN        21      // P14
 #define BUTTONS_OTHER_PIN       20      // P15
@@ -48,24 +57,36 @@
 #define BUTTONS_RIGHT_A_PIN     22
 
 #define GAMEBOY_RESET_PIN       11
-#else
+#else   // PCB_V3
 // GAMEBOY VIDEO INPUT (From level shifter)
-#define VSYNC_PIN               26
-#define PIXEL_CLOCK_PIN         21
-#define DATA_0_PIN              20
-#define DATA_1_PIN              19
-#define HSYNC_PIN               22
+#define VSYNC_PIN               18
+#define HSYNC_PIN               17
+#define PIXEL_CLOCK_PIN         16
+#define DATA_1_PIN              15
+#define DATA_0_PIN              14
 
-#define BUTTONS_DPAD_PIN        28      // P14
-#define BUTTONS_OTHER_PIN       27      // P15
-#define BUTTONS_LEFT_B_PIN      18
-#define BUTTONS_DOWN_START_PIN  14
-#define BUTTONS_UP_SELECT_PIN   15
-#define BUTTONS_RIGHT_A_PIN     17
+#define BUTTONS_DPAD_PIN        19      // P14
+#define BUTTONS_OTHER_PIN       20      // P15
+#define BUTTONS_LEFT_B_PIN      26
+#define BUTTONS_DOWN_START_PIN  21
+#define BUTTONS_UP_SELECT_PIN   22
+#define BUTTONS_RIGHT_A_PIN     27
 
-#define GAMEBOY_RESET_PIN       16
+#define GAMEBOY_RESET_PIN       28
 #endif
 
+
+
+
+#ifdef VGA_213x160_TEST
+// Game area will be 160x144, but can't do scanlines, etc.
+#define PIXELS_X                (160)
+#define PIXELS_Y                (144)
+#define PIXEL_SCALE             (1)
+#define PIXEL_COUNT             (PIXELS_X*PIXELS_Y)
+#define BORDER_HORZ             (26)    
+#define BORDER_VERT             (8)
+#else
 // Game area will be 480x432 
 #define PIXELS_X                (160)
 #define PIXELS_Y                (144)
@@ -73,12 +94,13 @@
 #define PIXEL_COUNT             (PIXELS_X*PIXELS_Y)
 #define BORDER_HORZ             (80)    
 #define BORDER_VERT             (24)
+#endif
 
 #define RGB888_TO_RGB222(r, g, b) ((((b)>>6u)<<PICO_SCANVIDEO_PIXEL_BSHIFT)|(((g)>>6u)<<PICO_SCANVIDEO_PIXEL_GSHIFT)|(((r)>>6u)<<PICO_SCANVIDEO_PIXEL_RSHIFT))
 
 static uint8_t border_colors[] = {
-    RGB888_TO_RGB222(0x00, 0x00, 0xFF), // BLUE
     RGB888_TO_RGB222(0x00, 0x00, 0x00), // BLACK
+    RGB888_TO_RGB222(0x00, 0x00, 0xFF), // BLUE
     RGB888_TO_RGB222(0xFF, 0xFF, 0xFF), // WHITE
     RGB888_TO_RGB222(0x80, 0x80, 0x80), // LIGHT GREY
     RGB888_TO_RGB222(0x40, 0x40, 0x40), // DARK GREY
@@ -797,6 +819,9 @@ static void change_border_color_index(int direction)
 
 static void change_video_effect(int increment)
 {
+#ifdef VGA_213x160_TEST
+return;
+#endif
     video_effect += increment;
     video_effect = video_effect >= VIDEO_EFFECT_COUNT ? VIDEO_EFFECT_NONE : video_effect;
     video_effect = video_effect < 0 ? VIDEO_EFFECT_COUNT-1 : video_effect;
@@ -913,15 +938,6 @@ static void set_indexes(void)
 
 static void update_osd(void)
 {
-/*
-------------------
-COLOR SCHEME:   99
-EFFECTS: SCANLINES
-FX SCHEME:       3
-RESET GAMEBOY
-EXIT
-*/
-
     char buff[32];
     sprintf(buff, "COLOR SCHEME:% 5d", color_offset/4);
     OSD_set_line_text(OSD_LINE_COLOR_SCHEME, buff);
@@ -929,6 +945,7 @@ EXIT
     sprintf(buff, "BORDER COLOR:% 5d", border_color_index);
     OSD_set_line_text(OSD_LINE_BORDER_COLOR, buff);
 
+#ifndef VGA_213x160_TEST
     if (video_effect==VIDEO_EFFECT_SCANLINES)
     {
         sprintf(buff, "EFFECTS: SCANLINES");
@@ -945,6 +962,8 @@ EXIT
 
     sprintf(buff, "FX SCHEME:% 8d", scanline_color_offset);
     OSD_set_line_text(OSD_LINE_FX_SCHEME, buff);
+#endif
+
     OSD_set_line_text(OSD_LINE_RESET_GAMEBOY, "RESET GAMEBOY");
     OSD_set_line_text(OSD_LINE_EXIT, "EXIT");
     OSD_update_framebuffer();
