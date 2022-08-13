@@ -67,10 +67,10 @@
 
 #define BUTTONS_DPAD_PIN        19      // P14
 #define BUTTONS_OTHER_PIN       20      // P15
-#define BUTTONS_LEFT_B_PIN      26
-#define BUTTONS_DOWN_START_PIN  21
-#define BUTTONS_UP_SELECT_PIN   22
-#define BUTTONS_RIGHT_A_PIN     27
+#define BUTTONS_LEFT_B_PIN      26      // P11
+#define BUTTONS_DOWN_START_PIN  21      // P13
+#define BUTTONS_UP_SELECT_PIN   22      // P12
+#define BUTTONS_RIGHT_A_PIN     27      // P10
 
 #define GAMEBOY_RESET_PIN       28
 #endif
@@ -143,8 +143,8 @@ typedef enum
 } osd_line_t;
 
 static semaphore_t video_initted;
-static volatile uint button_states[BUTTON_COUNT];
-static uint button_states_previous[BUTTON_COUNT];
+static volatile uint8_t button_states[BUTTON_COUNT];
+static uint8_t button_states_previous[BUTTON_COUNT];
 static volatile uint8_t buttons_state = 0xFF;
 static int color_offset = 0;
 static int scanline_color_offset = 0;
@@ -682,17 +682,21 @@ static void initialize_gpio(void)
     // gpio_pull_up(COLOR_CHANGE_PIN);
     
     /* NES Controller - start */
+
+    /* Clock, normally HIGH */
     gpio_init(PULSE_PIN);
     gpio_set_dir(PULSE_PIN, GPIO_OUT);
-    gpio_put(PULSE_PIN, 0);
+    gpio_put(PULSE_PIN, 1);
     
+    /* Latch, normally LOW */
     gpio_init(LATCH_PIN);
     gpio_set_dir(LATCH_PIN, GPIO_OUT);
     gpio_put(LATCH_PIN, 0);
     
+    /* Data, reads normally low */
     gpio_init(DATA_PIN);
     gpio_set_dir(DATA_PIN, GPIO_IN);
-    gpio_pull_up(DATA_PIN);
+    
     /* NES Controller - end */
     
     gpio_init(BUTTONS_RIGHT_A_PIN);
@@ -739,24 +743,21 @@ static void nes_controller()
         return;
 
     last_micros = current_micros;
-    
+
     gpio_put(LATCH_PIN, 1);
-    sleep_us(25);
+    sleep_us(5);
     gpio_put(LATCH_PIN, 0);
-    sleep_us(25);
+    button_states[0] = gpio_get(DATA_PIN);
 
-    for (int i = 0; i < 8; i++) 
+    for (uint i = 1; i < 8; i++) 
     {
-        button_states[i] = gpio_get(DATA_PIN);
-       
-        gpio_put(PULSE_PIN, 1);
-        sleep_us(25);
+        sleep_us(8);
         gpio_put(PULSE_PIN, 0);
-        sleep_us(25);
+        sleep_us(1);
+        gpio_put(PULSE_PIN, 1);
+        sleep_us(8);
+        button_states[i] = gpio_get(DATA_PIN);
     }
-
-    //gpio_put(ONBOARD_LED_PIN, button_states[BUTTON_START]);
-    //gpio_put(ONBOARD_LED_PIN, 0);
 }
 
 static void gpio_callback(uint gpio, uint32_t events) 
