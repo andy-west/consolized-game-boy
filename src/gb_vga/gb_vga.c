@@ -384,11 +384,11 @@ static uint16_t colors[] = {
     RGB888_TO_RGB222(0x42, 0x51, 0x29)
 };
 
-static void core1_func();
+static void core1_func(void);
 static void render_scanline(scanvideo_scanline_buffer_t *buffer);
 static void initialize_gpio(void);
-static void video_stuff();
-static void nes_controller();
+static void video_stuff(void);
+static void nes_controller(void);
 static void gpio_callback(uint gpio, uint32_t events);
 static void change_color_offset(int direction);
 static void change_border_color_index(int direction);
@@ -400,7 +400,7 @@ static bool button_was_released(controller_button_t button);
 static long map(long x, long in_min, long in_max, long out_min, long out_max);
 static void set_indexes(void);
 static void update_osd(void);
-static void gameboy_reset();
+static void gameboy_reset(void);
 //static void blink();
 
 int32_t single_solid_line(uint32_t *buf, size_t buf_length, uint16_t color);
@@ -435,7 +435,7 @@ int main(void)
     set_indexes();
 
     change_scanline_color(0);
-
+    
     OSD_init(osd_framebuffer);
     update_osd();
     
@@ -452,7 +452,7 @@ static long map(long x, long in_min, long in_max, long out_min, long out_max)
   return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
-static void video_stuff()
+static void video_stuff(void)
 {
     static bool vsync_reset;
     static bool vsync;
@@ -626,7 +626,7 @@ static void render_scanline(scanvideo_scanline_buffer_t *dest)
 }
 
 
-static void core1_func() 
+static void core1_func(void) 
 {
     
     hard_assert(VGA_MODE.width + 4 <= PICO_SCANVIDEO_MAX_SCANLINE_BUFFER_WORDS * 2);    
@@ -693,7 +693,7 @@ static void initialize_gpio(void)
     gpio_set_dir(LATCH_PIN, GPIO_OUT);
     gpio_put(LATCH_PIN, 0);
     
-    /* Data, reads normally low */
+    /* Data, reads normally high */
     gpio_init(DATA_PIN);
     gpio_set_dir(DATA_PIN, GPIO_IN);
     
@@ -735,7 +735,8 @@ static void initialize_gpio(void)
 //     }
 // }
 
-static void nes_controller()
+
+static void nes_controller(void)
 {
     static uint32_t last_micros = 0;
     uint32_t current_micros = time_us_32();
@@ -747,7 +748,9 @@ static void nes_controller()
     gpio_put(LATCH_PIN, 1);
     sleep_us(5);
     gpio_put(LATCH_PIN, 0);
+    sleep_us(1);
     button_states[0] = gpio_get(DATA_PIN);
+    sleep_us(4);
 
     for (uint i = 1; i < 8; i++) 
     {
@@ -799,7 +802,6 @@ static void gpio_callback(uint gpio, uint32_t events)
         gpio_put(BUTTONS_LEFT_B_PIN, 1);
         gpio_put(BUTTONS_UP_SELECT_PIN, 1);
         gpio_put(BUTTONS_DOWN_START_PIN, 1);
-
     }
 }
 
@@ -967,10 +969,11 @@ static void update_osd(void)
 
     OSD_set_line_text(OSD_LINE_RESET_GAMEBOY, "RESET GAMEBOY");
     OSD_set_line_text(OSD_LINE_EXIT, "EXIT");
+
     OSD_update_framebuffer();
 }
 
-static void gameboy_reset()
+static void gameboy_reset(void)
 {
     gpio_put(GAMEBOY_RESET_PIN, 0);
     sleep_ms(50);
