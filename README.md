@@ -10,13 +10,13 @@ Notable changes:
  - 3x scale maintaining aspect ratio
  - Option to enable scanlines, pixel effect, etc.
  - The Color scheme, border, effects can be changed via a menu overlay
- - With Version 2 PCB, you won't need a functioning Gameboy motherboard.  You just need a good CPU and RAM (you could even use CPU/RAM from a Super Gameboy SNES/Famicom cartridge)
+ - With Version 3 PCB, you won't need a functioning Gameboy motherboard.  You just need a good CPU and RAM (you could even use CPU/RAM from a Super Gameboy SNES/Famicom cartridge)
 
 ![preview](https://github.com/joeostrander/consolized-game-boy/blob/main/images/preview.png?raw=true)
 
 [Video sample](https://youtu.be/khdu8cWNxHo)
 
-[OSD](https://youtu.be/it27PfHu0o8)
+[OSD](https://youtu.be/VJUn-7w2_1k)
 
 
 Check out Andy's video!  

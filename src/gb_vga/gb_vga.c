@@ -19,9 +19,15 @@
 #include "hardware/vreg.h"
 #include "pico/stdio.h"
 #include "osd.h"
+#include "hardware/i2c.h"
+
+//#define NES_CLASSIC_CONTROLLER
+#define SDA_PIN     12
+#define SCL_PIN     13
+#define I2C_ADDRESS 0x52
+i2c_inst_t* i2cHandle = i2c0;
 
 // #define VGA_213x160_TEST
-
 #ifdef VGA_213x160_TEST
 #define VGA_MODE vga_mode_213x160_60
 #else
@@ -30,8 +36,6 @@
 #define MIN_RUN 3
 
 #define ONBOARD_LED_PIN         25
-#define STATUS_LED_PIN          12
-//#define STATUS_LED_PIN2         13
 
 // INPUTS (NES Controller, color change pin)
 #define DATA_PIN                8
@@ -75,26 +79,21 @@
 #define GAMEBOY_RESET_PIN       28
 #endif
 
-
-
-
-#ifdef VGA_213x160_TEST
-// Game area will be 160x144, but can't do scanlines, etc.
 #define PIXELS_X                (160)
 #define PIXELS_Y                (144)
+#ifdef VGA_213x160_TEST
+// Game area will be 160x144, but can't do scanlines, etc.
 #define PIXEL_SCALE             (1)
-#define PIXEL_COUNT             (PIXELS_X*PIXELS_Y)
 #define BORDER_HORZ             (26)    
 #define BORDER_VERT             (8)
 #else
 // Game area will be 480x432 
-#define PIXELS_X                (160)
-#define PIXELS_Y                (144)
 #define PIXEL_SCALE             (3)
-#define PIXEL_COUNT             (PIXELS_X*PIXELS_Y)
 #define BORDER_HORZ             (80)    
 #define BORDER_VERT             (24)
 #endif
+
+#define PIXEL_COUNT             (PIXELS_X*PIXELS_Y)
 
 #define RGB888_TO_RGB222(r, g, b) ((((b)>>6u)<<PICO_SCANVIDEO_PIXEL_BSHIFT)|(((g)>>6u)<<PICO_SCANVIDEO_PIXEL_GSHIFT)|(((r)>>6u)<<PICO_SCANVIDEO_PIXEL_RSHIFT))
 
@@ -389,6 +388,7 @@ static void render_scanline(scanvideo_scanline_buffer_t *buffer);
 static void initialize_gpio(void);
 static void video_stuff(void);
 static void nes_controller(void);
+static void nes_classic_controller(void);
 static void gpio_callback(uint gpio, uint32_t events);
 static void change_color_offset(int direction);
 static void change_border_color_index(int direction);
@@ -412,7 +412,6 @@ int main(void)
     sleep_ms(10);
 
     set_sys_clock_khz(300000, true);
-
 
     // Create a semaphore to be posted when video init is complete.
     sem_init(&video_initted, 0, 1);
@@ -442,7 +441,11 @@ int main(void)
     while (true) 
     {
         video_stuff();
+#ifdef NES_CLASSIC_CONTROLLER
+        nes_classic_controller();
+#else
         nes_controller();
+#endif
         command_check();
     }
 }
@@ -654,16 +657,6 @@ static void initialize_gpio(void)
     gpio_set_dir(ONBOARD_LED_PIN, GPIO_OUT);
     gpio_put(ONBOARD_LED_PIN, 0);
 
-    // Status LED
-    gpio_init(STATUS_LED_PIN);
-    gpio_set_dir(STATUS_LED_PIN, GPIO_OUT);
-    gpio_put(STATUS_LED_PIN, 0);
-
-    // gpio_init(STATUS_LED_PIN2);
-    // gpio_set_dir(STATUS_LED_PIN2, GPIO_OUT);
-    // gpio_put(STATUS_LED_PIN2, 0);
-
-    
     // Gameboy Reset
     gpio_init(GAMEBOY_RESET_PIN);
     gpio_set_dir(GAMEBOY_RESET_PIN, GPIO_OUT);
@@ -675,12 +668,22 @@ static void initialize_gpio(void)
     gpio_init(DATA_0_PIN);
     gpio_init(DATA_1_PIN);
     gpio_init(HSYNC_PIN);
-   
-    // // color change button input, pulled high
-    // gpio_init(COLOR_CHANGE_PIN);
-    // gpio_set_dir(COLOR_CHANGE_PIN, GPIO_IN);
-    // gpio_pull_up(COLOR_CHANGE_PIN);
-    
+
+#ifdef NES_CLASSIC_CONTROLLER
+
+    // UART, for testing
+    //stdio_init_all();
+
+    // //Initialize I2C port at 400 kHz
+    i2c_init(i2cHandle, 400 * 1000);
+
+    // Initialize I2C pins
+    gpio_set_function(SCL_PIN, GPIO_FUNC_I2C);
+    gpio_set_function(SDA_PIN, GPIO_FUNC_I2C);
+    gpio_pull_up(SCL_PIN);
+    gpio_pull_up(SDA_PIN);
+
+#else
     /* NES Controller - start */
 
     /* Clock, normally HIGH */
@@ -696,8 +699,9 @@ static void initialize_gpio(void)
     /* Data, reads normally high */
     gpio_init(DATA_PIN);
     gpio_set_dir(DATA_PIN, GPIO_IN);
-    
+
     /* NES Controller - end */
+#endif
     
     gpio_init(BUTTONS_RIGHT_A_PIN);
     gpio_set_dir(BUTTONS_RIGHT_A_PIN, GPIO_OUT);
@@ -735,7 +739,6 @@ static void initialize_gpio(void)
 //     }
 // }
 
-
 static void nes_controller(void)
 {
     static uint32_t last_micros = 0;
@@ -761,6 +764,90 @@ static void nes_controller(void)
         sleep_us(8);
         button_states[i] = gpio_get(DATA_PIN);
     }
+}
+
+static void nes_classic_controller(void)
+{
+    static uint32_t last_micros = 0;
+    uint32_t current_micros = time_us_32();
+
+    if (current_micros - last_micros < 20000)
+        return;
+    
+    static bool initialized = false;
+    static uint8_t i2c_buffer[16] = {0};
+
+    if (!initialized)
+    {
+        sleep_ms(2000);
+
+        i2c_buffer[0] = 0xF0;
+        i2c_buffer[1] = 0x55;
+        (void)i2c_write_blocking(i2cHandle, I2C_ADDRESS, i2c_buffer, 2, false);
+        sleep_ms(10);
+
+        i2c_buffer[0] = 0xFB;
+        i2c_buffer[1] = 0x00;
+        (void)i2c_write_blocking(i2cHandle, I2C_ADDRESS, i2c_buffer, 2, false);
+        sleep_ms(20);
+
+        initialized = true;
+    }
+
+    last_micros = current_micros;
+
+    i2c_buffer[0] = 0x00;
+    (void)i2c_write_blocking(i2cHandle, I2C_ADDRESS, i2c_buffer, 1, false);   // false - finished with bus
+    sleep_ms(1);
+    int ret = i2c_read_blocking(i2cHandle, I2C_ADDRESS, i2c_buffer, 8, false);
+    if (ret < 0)
+    {
+        last_micros = time_us_32();
+        return;
+    }
+        
+    bool valid = false;
+    uint8_t i;
+    for (i = 0; i < 8; i++)
+    {
+        if (i2c_buffer[i] != 0xFF)
+            valid = true;
+
+        if (valid)
+        {
+            if (i == 4)
+            {
+                button_states[BUTTON_START] = (~i2c_buffer[i] & (1<<2)) > 0 ? 0 : 1;
+                button_states[BUTTON_SELECT] = (~i2c_buffer[i] & (1<<4)) > 0 ? 0 : 1;
+                button_states[BUTTON_DOWN] = (~i2c_buffer[i] & (1<<6)) > 0 ? 0 : 1;
+                button_states[BUTTON_RIGHT] = (~i2c_buffer[i] & (1<<7)) > 0 ? 0 : 1;
+            }
+            else if (i == 5)
+            {
+                button_states[BUTTON_UP] = (~i2c_buffer[i] & (1<<0)) > 0 ? 0 : 1;
+                button_states[BUTTON_LEFT] = (~i2c_buffer[i] & (1<<1)) > 0 ? 0 : 1;
+                button_states[BUTTON_A] = (~i2c_buffer[i] & (1<<4)) > 0 ? 0 : 1;
+                button_states[BUTTON_B] = (~i2c_buffer[i] & (1<<6)) > 0 ? 0 : 1;
+            }
+        }
+    }
+
+    if (!valid )
+    {
+        initialized = false;
+        sleep_ms(1000);
+        last_micros = time_us_32();
+    }
+
+    uint8_t buttondown = 0;
+    for (i = 0; i < BUTTON_COUNT; i++)
+    {
+        if (button_states[i] == 0)
+        {
+            buttondown = 1;
+        }
+    }
+    gpio_put(ONBOARD_LED_PIN, buttondown);
 }
 
 static void gpio_callback(uint gpio, uint32_t events) 
@@ -856,7 +943,6 @@ static void command_check(void)
         if (button_was_released(BUTTON_START))
         {
             OSD_toggle();
-            gpio_put(STATUS_LED_PIN, OSD_is_enabled() ? 1 : 0);
         }
     }
     else
@@ -900,7 +986,6 @@ static void command_check(void)
                         break;
                     case OSD_LINE_EXIT:
                         OSD_toggle();
-                        gpio_put(STATUS_LED_PIN, OSD_is_enabled() ? 1 : 0);
                         break;
                 }
             }

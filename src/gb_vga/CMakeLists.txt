@@ -28,7 +28,11 @@ if (TARGET pico_scanvideo_dpi)
             pico_multicore
             pico_stdlib
             pico_scanvideo_dpi
+            hardware_i2c
             )
+
+    # pico_enable_stdio_usb(gb_vga 1)
+    # pico_enable_stdio_uart(gb_vga 0)
 
     pico_add_extra_outputs(gb_vga)
 endif ()
