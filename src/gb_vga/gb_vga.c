@@ -21,7 +21,7 @@
 #include "osd.h"
 #include "hardware/i2c.h"
 
-//#define NES_CLASSIC_CONTROLLER
+#define NES_CLASSIC_CONTROLLER
 #define SDA_PIN     12
 #define SCL_PIN     13
 #define I2C_ADDRESS 0x52
@@ -860,25 +860,30 @@ static void gpio_callback(uint gpio, uint32_t events)
 
     if(gpio==BUTTONS_DPAD_PIN)
     {
-        // Send DPAD on falling
-        if (events & (1<<2))   // EDGE LOW
+        if (events & (1<<2))   // EDGE LOW -- Send DPAD on falling
         {
             gpio_put(BUTTONS_RIGHT_A_PIN, button_states[BUTTON_RIGHT]);
             gpio_put(BUTTONS_LEFT_B_PIN, button_states[BUTTON_LEFT]);
             gpio_put(BUTTONS_UP_SELECT_PIN, button_states[BUTTON_UP]);
             gpio_put(BUTTONS_DOWN_START_PIN, button_states[BUTTON_DOWN]);
         }
-    }
-
-    if(gpio==BUTTONS_DPAD_PIN)
-    {
-        // Send BUTTONS on rising
-        if (events & (1<<3)) // EDGE HIGH
+        
+        if (events & (1<<3)) // EDGE HIGH -- Send BUTTONS on rising
         {
             gpio_put(BUTTONS_RIGHT_A_PIN, button_states[BUTTON_A]);
             gpio_put(BUTTONS_LEFT_B_PIN, button_states[BUTTON_B]);
             gpio_put(BUTTONS_UP_SELECT_PIN, button_states[BUTTON_SELECT]);
             gpio_put(BUTTONS_DOWN_START_PIN, button_states[BUTTON_START]);
+
+            // Prevent Tetris in-game reset lockup
+            // If A,B,Select and Start are all pressed, release them!
+            if ((button_states[BUTTON_A] | button_states[BUTTON_B] | button_states[BUTTON_SELECT]| button_states[BUTTON_START])==0)
+            {
+                button_states[BUTTON_A] = 1;
+                button_states[BUTTON_B] = 1;
+                button_states[BUTTON_SELECT] = 1;
+                button_states[BUTTON_START] = 1;
+            }
         }
     }
 
