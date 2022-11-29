@@ -22,7 +22,7 @@ Notable changes:
 [OSD](https://youtu.be/VJUn-7w2_1k)
 
 Andy liked my modifications and made an updated video where he built one with my changes :)
-[![The Game Guy Mini, Upgrading the Unportable Game Boy!](https://i.ytimg.com/vi/gPNHySf-hk0/sddefault.jpg)](https://youtu.be/gPNHySf-hk0)
+[![The Game Guy Mini, Upgrading the Unportable Game Boy!](https://i.ytimg.com/vi/gPNHySf-hk0/0.jpg)](https://youtu.be/gPNHySf-hk0)
 
 Check out Andy's original video!  
 [![Game Guy - The Unportable Game Boy](https://img.youtube.com/vi/ypGMU5lLjeU/0.jpg)](https://www.youtube.com/watch?v=ypGMU5lLjeU)
